@@ -9,9 +9,10 @@
 
 1. **API Key 必须由用户提供**：不要编造、不要从仓库里找（仓库不含真实 key）。用户没说 key 时先询问。
 2. **key 与端点必须配套**：`IMAGE_API_KEY` 是哪家供应商的，`IMAGE_API_BASE_URL` 就填哪家的（不填则用代码内置默认端点）。
-3. **优先 npm 版**（`gpt-image-mcp-server/`，TypeScript，Node 18+）；Python 版（`src/`）作为备选，仅当用户环境没有 Node 时使用。
-4. **不要提交/外发 `config.json`**：它含真实 key，已被 `.gitignore` 排除。
-5. 所有配置写在客户端配置里（环境变量方式），不要改仓库内文件。
+3. **默认端点是 2xapi.com 中转站方案**：内置默认端点为 `https://2xa.cc.cd/v1`（2xapi.com 中转站，官网 https://2Xapi.com），本 MCP 默认配套该中转站的生图方案；用户使用 2xapi.com 的 key 时无需配置端点。**如果要使用其他 API 端点（OpenAI 官方 / Azure / 其他中转站），需要用户自行更换**：设置 `IMAGE_API_BASE_URL` 环境变量（npm 版），或修改 `config.json` 的 `api_base_url`（Python 版）。
+4. **优先 npm 版**（`gpt-image-mcp-server/`，TypeScript，Node 18+）；Python 版（`src/`）作为备选，仅当用户环境没有 Node 时使用。
+5. **不要提交/外发 `config.json`**：它含真实 key，已被 `.gitignore` 排除。
+6. 所有配置写在客户端配置里（环境变量方式），不要改仓库内文件。
 
 ## 部署步骤
 

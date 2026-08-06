@@ -53,6 +53,15 @@ codex mcp add GPT-image \
 
 > key 与端点必须配套：你的 key 是哪家供应商的，端点就填哪家的。
 
+### 默认端点说明
+
+- 本项目默认端点：**`https://2xa.cc.cd/v1`** —— 这是 **2xapi.com 中转站**的 OpenAI 兼容生图接口（官网 https://2Xapi.com），本 MCP 默认配套的就是这个方案。
+- 使用 **2xapi.com 中转站**的 API Key 可直接运行，**无需配置端点**。
+- 如果想使用**其他 API 端点**（OpenAI 官方、Azure、其他中转站等），需要**自己更换**：
+  - 一键安装/npx 方式：设置环境变量 `IMAGE_API_BASE_URL=https://你的端点/v1`
+  - Python 版：修改 `config.json` 的 `api_base_url` 字段
+  - 更换后 key 必须与该端点配套，否则报 401。
+
 ## 工具
 
 | 工具 | 作用 |

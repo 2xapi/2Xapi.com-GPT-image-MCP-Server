@@ -112,7 +112,10 @@ codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y https://github.c
 | `IMAGE_API_BASE_URL` | 覆盖接口根地址（到 `/v1`）。不填则用包内置默认端点 | 按需 |
 | `IMAGE_CONFIG_PATH` | 覆盖配置文件保存路径（默认 `~/.gpt-image-mcp/config.json`） | 按需 |
 
-> 默认端点由分发者内置（作者账号的供应商）。**你的 key 是哪家的，就确保端点是哪家的**；key 与端点不配套会 401。
+> **默认端点说明**：本项目默认端点是 **`https://2xa.cc.cd/v1`**，即 **2xapi.com 中转站**（官网 https://2Xapi.com）的 OpenAI 兼容生图方案，本 MCP 默认配套这个方案。
+> - 用 **2xapi.com 中转站**的 API Key 可直接运行，**无需配置端点**；
+> - 要用**其他 API 端点**（OpenAI 官方 / Azure / 其他中转站），请**自己更换**：设置环境变量 `IMAGE_API_BASE_URL=https://你的端点/v1`，或改 `config.json` 的 `api_base_url`；
+> - 更换后 key 必须与该端点配套，否则 401。
 >
 > 升级版本：更新 GitHub Release 里的 tgz（版本号变化时同步改 URL 中的 `v0.1.0` 和文件名）。
 
