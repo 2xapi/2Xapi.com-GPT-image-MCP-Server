@@ -2,7 +2,8 @@
 
 把 OpenAI 兼容的文生图接口封装成 MCP 工具。接入 Claude Code / Codex / Cursor / Claude Desktop 等客户端后，**对话里说「画一只柴犬」就能出图**。每位用户使用**自己的 API Key**，消耗计费到各自账号。
 
-- 📄 部署文档：`GPT-image MCP Server部署文档.md`（约 5 分钟）
+- 🤖 **AI 一键部署**：把仓库地址发给任何 AI（Codex / Claude），它会读 `AGENTS.md` 自动完成部署；或直接跑 `./deploy.sh --client codex --key 你的key`
+- 📄 部署文档：`GPT-image MCP Server部署文档.md`（约 5 分钟，含给 AI 的提示词模板）
 - 🐍 Python 版：`src/`（手动部署用，支持 `uvx` / `uv run`）
 - ⚡ npm 版：`gpt-image-mcp-server/`（一键安装，推荐）
 

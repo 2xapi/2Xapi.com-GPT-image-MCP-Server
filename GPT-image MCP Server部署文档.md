@@ -50,6 +50,24 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 > ```
 
 
+
+## 方式零（最省事）：交给 AI 一键部署
+
+把下面这段话**原样发给你的 AI**（Codex / Claude 等支持读取仓库 `AGENTS.md` 的 AI），它会自动完成：下载代码 → 装依赖 → 让你填 key → 接入客户端 → 验证：
+
+> 请帮我部署这个 MCP 项目：https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server
+> 我的 API Key：`sk-你的key`
+> 我要接入的客户端：Codex（或换成 Claude Code / Claude Desktop / Cursor）
+
+> 说明：仓库里已内置 `AGENTS.md`（AI 部署指南）和 `deploy.sh`（一键部署脚本），AI 会按指南自动执行；如果你不想用 AI，也可以手动运行：
+> ```bash
+> git clone https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server.git
+> cd 2Xapi.com-GPT-image-MCP-Server
+> ./deploy.sh --client codex --key sk-你的key
+> ```
+
+---
+
 ## 快速开始（推荐）：npm 一条命令安装，不用下载代码
 
 > 适合已发布到 GitHub Releases 后的版本。前提：**Node.js 18+**（`node -v` 查看；没有就装 Node.js）。
