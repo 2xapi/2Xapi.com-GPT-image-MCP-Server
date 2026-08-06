@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Secrets — never commit
+src/image_mcp_server/config.json
+config.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+
+# Python build artifacts (wheel/sdist)
+dist/
+
+# npm package artifacts & deps
+*.tgz
+node_modules/
+
+# Backups
+*.bak
+*.bak-*
+
+# Keep npm compiled dist (so `npx github:...` works without building)
+!gpt-image-mcp-server/dist/

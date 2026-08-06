@@ -1,0 +1,14 @@
+{
+  "api_base_url": "https://your-provider.com/v1",
+  "api_key": "sk-你的真实密钥",
+  "model": "gpt-image-2",
+  "size": "1024x1024",
+  "save_dir": "",
+  "moderation": {
+    "enabled": false,
+    "api_base_url": "",
+    "api_key": "",
+    "model": "",
+    "prompt": ""
+  }
+}

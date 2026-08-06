@@ -1,0 +1,22 @@
+[project]
+name = "image-mcp-server"
+version = "0.1.0"
+description = "MCP server for text-to-image generation via an OpenAI-compatible images API (2xa.cc.cd)."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "wenkezhi" }]
+dependencies = [
+    "mcp>=1.2.0",
+    "httpx>=0.27.0",
+    "anyio>=3.7.0",
+]
+
+[project.scripts]
+image-mcp-server = "image_mcp_server.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/image_mcp_server"]
