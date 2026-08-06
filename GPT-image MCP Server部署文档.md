@@ -52,19 +52,20 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 
 ## 快速开始（推荐）：npm 一条命令安装，不用下载代码
 
-> 适合已经发布到 npm 后的版本。前提：**Node.js 18+**（`node -v` 查看；没有就装 Node.js）。
+> 适合已发布到 GitHub Releases 后的版本。前提：**Node.js 18+**（`node -v` 查看；没有就装 Node.js）。
 > 你只需要自己的 API Key，**不需要** clone 代码、装 Python/uv、建 config.json、填绝对路径。
+> 下面的命令已内置发布地址，直接把 `你的key` 换成你自己的即可。
 
 ### Claude Code（一行命令）
 
 ```bash
-claude mcp add -s user gpt-image --env IMAGE_API_KEY=你的key -- npx -y gpt-image-mcp-server
+claude mcp add -s user gpt-image --env IMAGE_API_KEY=你的key -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.1.0/gpt-image-mcp-server-0.1.0.tgz
 ```
 
 ### Codex（一行命令）
 
 ```bash
-codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y gpt-image-mcp-server
+codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.1.0/gpt-image-mcp-server-0.1.0.tgz
 ```
 
 ### Claude Desktop / Cursor（手动配置）
@@ -76,7 +77,7 @@ codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y gpt-image-mcp-se
   "mcpServers": {
     "GPT-image": {
       "command": "npx",
-      "args": ["-y", "gpt-image-mcp-server"],
+      "args": ["-y", "https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.1.0/gpt-image-mcp-server-0.1.0.tgz"],
       "env": {
         "IMAGE_API_KEY": "你的key"
       }
@@ -95,7 +96,7 @@ codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y gpt-image-mcp-se
 
 > 默认端点由分发者内置（作者账号的供应商）。**你的 key 是哪家的，就确保端点是哪家的**；key 与端点不配套会 401。
 >
-> 升级版本：`npx` 有缓存，更新到新版本时用 `npx -y gpt-image-mcp-server@latest`，或在客户端配置里把包名改成 `gpt-image-mcp-server@<版本号>`。
+> 升级版本：更新 GitHub Release 里的 tgz（版本号变化时同步改 URL 中的 `v0.1.0` 和文件名）。
 
 ---
 
