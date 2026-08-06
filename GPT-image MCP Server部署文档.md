@@ -59,11 +59,13 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 > 我的 API Key：`sk-你的key`
 > 我要接入的客户端：Codex（或换成 Claude Code / Claude Desktop / Cursor）
 
-> 说明：仓库里已内置 `AGENTS.md`（AI 部署指南）和 `deploy.sh`（一键部署脚本），AI 会按指南自动执行；如果你不想用 AI，也可以手动运行：
+> 说明：仓库里已内置 `AGENTS.md`（AI 部署指南）和两个一键脚本，AI 会按指南自动执行；如果你不想用 AI，也可以手动运行：
 > ```bash
 > git clone https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server.git
 > cd 2Xapi.com-GPT-image-MCP-Server
-> ./deploy.sh --client codex --key sk-你的key
+> ./deploy.sh --client codex --key sk-你的key   # 本地构建安装（不依赖 Release）
+> # 或（无需 clone，但要求 GitHub Release 已发布）：
+> IMAGE_API_KEY=sk-你的key ./install.sh        # 自动检测 claude/codex 并接入
 > ```
 
 ---
