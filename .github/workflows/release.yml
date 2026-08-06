@@ -1,0 +1,46 @@
+name: Release npm package
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: gpt-image-mcp-server/package-lock.json
+
+      - name: Build and pack npm package
+        working-directory: gpt-image-mcp-server
+        run: |
+          npm ci
+          npm run build
+          npm pack
+
+      - name: Create GitHub Release and upload tgz
+        working-directory: gpt-image-mcp-server
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          TGZ=$(ls gpt-image-mcp-server-*.tgz | head -1)
+          echo "Uploading $TGZ for tag $TAG"
+          gh release create "$TAG" "$TGZ" \
+            --repo "${{ github.repository }}" \
+            --title "$TAG" \
+            --notes "GPT-image MCP Server $TAG
+- npm one-command install:
+  \`npx -y https://github.com/${{ github.repository }}/releases/download/$TAG/$TGZ\`
+- 默认端点: https://2xa.cc.cd/v1（2xapi.com 中转站生图方案）
+- 环境变量: IMAGE_API_KEY（必填）、IMAGE_API_BASE_URL（可选）
+- 支持 Claude Code / Codex / Claude Desktop / Cursor"
