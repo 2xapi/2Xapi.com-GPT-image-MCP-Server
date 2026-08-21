@@ -36,8 +36,9 @@ jobs:
           TGZ=$(ls gpt-image-mcp-server-*.tgz | head -1)
           echo "Uploading $TGZ for tag $TAG"
           NOTES=$(cat <<'MD'
-          GPT-image MCP Server v0.1.0
+          GPT-image MCP Server
           - npm one-command install: npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/TAG/REPLACE_TGZ
+          - 文生图 generate_image + 图生图 edit_image（本地路径 / URL / data URI / base64 + 文字指令）
           - 默认端点: https://2xa.cc.cd/v1（2xapi.com 中转站生图方案）
           - 环境变量: IMAGE_API_KEY（必填）、IMAGE_API_BASE_URL（可选）
           - 支持 Claude Code / Codex / Claude Desktop / Cursor

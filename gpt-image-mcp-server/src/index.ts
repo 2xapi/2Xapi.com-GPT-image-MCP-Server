@@ -19,6 +19,8 @@ import { z } from "zod";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import sharp from "sharp";
 
 // --------------------------------------------------------------------------- //
 // Defaults & config                                                           //
@@ -59,6 +61,24 @@ const DEFAULTS: AppConfig = {
 const CONFIG_PATH = process.env.IMAGE_CONFIG_PATH
   ? path.resolve(process.env.IMAGE_CONFIG_PATH)
   : path.join(os.homedir(), ".gpt-image-mcp", "config.json");
+
+// Input image guards: real-format validation via sharp, 50 MB hard limit, and
+// auto-downscale of oversized uploads (>4 MB or >1024 px) before multipart POST.
+const MAX_INPUT_BYTES = 50 * 1024 * 1024;
+const SOFT_INPUT_BYTES = 4 * 1024 * 1024;
+const MAX_EDGE_PX = 1024;
+const EXT_BY_FORMAT: Record<string, string> = {
+  png: ".png",
+  jpeg: ".jpg",
+  webp: ".webp",
+  gif: ".gif",
+};
+const MIME_BY_FORMAT: Record<string, string> = {
+  png: "image/png",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+};
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
@@ -112,6 +132,34 @@ function maskKey(key: string): string {
 }
 
 // --------------------------------------------------------------------------- //
+// Path allowlist: local image inputs must live under home or IMAGE_ALLOWED_ROOTS
+// --------------------------------------------------------------------------- //
+function allowedRoots(): string[] {
+  const home = path.resolve(os.homedir());
+  const extra = (process.env.IMAGE_ALLOWED_ROOTS ?? "")
+    .split(path.delimiter)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((p) => path.resolve(p));
+  return [...new Set([home, ...extra])];
+}
+
+function isWithin(candidate: string, root: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function assertAllowedPath(p: string): void {
+  const resolved = path.resolve(p);
+  if (!allowedRoots().some((root) => isWithin(resolved, root))) {
+    throw new ImageAPIError(
+      `Path ${p} is outside the allowed roots (home + IMAGE_ALLOWED_ROOTS). ` +
+        `Add the directory to IMAGE_ALLOWED_ROOTS to read it.`,
+    );
+  }
+}
+
+// --------------------------------------------------------------------------- //
 // HTTP helpers                                                                //
 // --------------------------------------------------------------------------- //
 
@@ -128,8 +176,11 @@ async function httpJson(
     Accept: "application/json",
     "User-Agent": USER_AGENT,
   };
-  let body: string | undefined;
-  if (init.body !== undefined) {
+  let body: string | FormData | undefined;
+  if (init.body instanceof FormData) {
+    // Multipart upload (images/edits): fetch sets Content-Type + boundary itself.
+    body = init.body;
+  } else if (init.body !== undefined) {
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(init.body);
   }
@@ -224,6 +275,235 @@ async function download(url: string, timeoutMs = 60_000): Promise<Buffer> {
 }
 
 // --------------------------------------------------------------------------- //
+// Image input resolution (for edit_image)                                     //
+// --------------------------------------------------------------------------- //
+
+interface ResolvedImage {
+  buffer: Buffer;
+  filename: string;
+  mime: string;
+}
+
+const MIME_BY_EXT: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+const EXT_BY_MIME: Record<string, string> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+};
+
+function mimeForName(name: string): string {
+  return MIME_BY_EXT[path.extname(name).toLowerCase()] ?? "image/png";
+}
+
+/** ASCII-safe filename stem, plus a known extension when one is provided. */
+function asciiStem(name: string, index: number): string {
+  const ext = path.extname(name).toLowerCase();
+  const stem =
+    path.basename(name, ext).replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") ||
+    `image${index + 1}`;
+  return stem.slice(0, 40);
+}
+
+function asciiSafeName(name: string, index: number): string {
+  const ext = path.extname(name).toLowerCase();
+  const safeExt = MIME_BY_EXT[ext] ? ext : ".png";
+  return `${asciiStem(name, index)}${safeExt}`;
+}
+
+const RAW_BASE64_RE = /^[A-Za-z0-9+/=\r\n]+$/;
+
+/**
+ * Turn an image reference into raw bytes + upload metadata. Accepted forms:
+ * local file path, http(s) URL, `data:image/...;base64,...` URI, raw base64.
+ */
+async function resolveImageInput(ref: string, index: number): Promise<ResolvedImage> {
+  const s = ref.trim();
+  if (!s) throw new ImageAPIError("Image reference must not be empty.");
+
+  const dataUri = s.match(/^data:(image\/[a-z0-9.+-]+);base64,(.*)$/is);
+  if (dataUri) {
+    const mime = dataUri[1].toLowerCase();
+    const buffer = Buffer.from(dataUri[2], "base64");
+    if (!buffer.length) throw new ImageAPIError("data: URI contains no image data.");
+    return { buffer, filename: `image${index + 1}${EXT_BY_MIME[mime] ?? ".png"}`, mime };
+  }
+
+  if (/^https?:\/\//i.test(s)) {
+    let buffer: Buffer;
+    try {
+      buffer = await download(s);
+    } catch (err) {
+      throw new ImageAPIError(
+        `Could not download image ${s}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (!buffer.length) throw new ImageAPIError(`Image URL returned no data: ${s}`);
+    const name = decodeURIComponent(new URL(s).pathname.split("/").pop() ?? "") || `image${index + 1}`;
+    return { buffer, filename: asciiSafeName(name, index), mime: mimeForName(name) };
+  }
+
+  if (fs.existsSync(s) && fs.statSync(s).isFile()) {
+    assertAllowedPath(s);
+    const buffer = fs.readFileSync(s);
+    if (!buffer.length) throw new ImageAPIError(`Image file is empty: ${s}`);
+    return { buffer, filename: asciiSafeName(path.basename(s), index), mime: mimeForName(s) };
+  }
+
+  if (s.length >= 64 && RAW_BASE64_RE.test(s)) {
+    const buffer = Buffer.from(s, "base64");
+    if (buffer.length) return { buffer, filename: `image${index + 1}.png`, mime: "image/png" };
+  }
+
+  throw new ImageAPIError(
+    `Unrecognized image input: "${s.slice(0, 60)}${s.length > 60 ? "..." : ""}". ` +
+      "Provide a local file path, an http(s) URL, a data: URI, or raw base64.",
+  );
+}
+
+function saveImageFile(data: Buffer, prompt: string, saveDir: string): string {
+  const slug = prompt.slice(0, 30).replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "image";
+  fs.mkdirSync(saveDir, { recursive: true });
+  const p = path.join(saveDir, `${Date.now()}_${slug}.png`);
+  fs.writeFileSync(p, data);
+  return p;
+}
+
+/**
+ * Validate + normalize an input image before upload: 50 MB hard cap, real-format
+ * sniffing via sharp (rejects non-images, fixes filename/mime), and auto-downscale
+ * of oversized inputs (>4 MB or any edge >1024 px) to keep uploads under the
+ * upstream's practical limits.
+ */
+async function normalizeImage(img: ResolvedImage, label: string): Promise<ResolvedImage> {
+  if (img.buffer.length > MAX_INPUT_BYTES) {
+    throw new ImageAPIError(`${label} exceeds the 50 MB upload limit.`);
+  }
+  interface ImageMeta {
+    format?: string;
+    width?: number;
+    height?: number;
+  }
+  let meta: ImageMeta;
+  try {
+    meta = (await sharp(img.buffer, { animated: true }).metadata()) as ImageMeta;
+  } catch {
+    throw new ImageAPIError(`${label} is not a valid image file.`);
+  }
+  const fmt = meta.format ?? "";
+  if (!MIME_BY_FORMAT[fmt]) {
+    throw new ImageAPIError(`${label} has unsupported image format${fmt ? ` (${fmt})` : ""}.`);
+  }
+  const wide = meta.width ?? 0;
+  const tall = meta.height ?? 0;
+  if (img.buffer.length > SOFT_INPUT_BYTES || wide > MAX_EDGE_PX || tall > MAX_EDGE_PX) {
+    const resized = await sharp(img.buffer)
+      .rotate()
+      .resize({ width: MAX_EDGE_PX, height: MAX_EDGE_PX, fit: "inside", withoutEnlargement: true })
+      .png()
+      .toBuffer();
+    return {
+      buffer: resized,
+      filename: `${asciiStem(img.filename, 0)}.png`,
+      mime: "image/png",
+    };
+  }
+  // Align filename extension with the real format (a "cat.jpg" that is actually
+  // a PNG gets uploaded as cat.png).
+  const ext = EXT_BY_FORMAT[fmt];
+  return { buffer: img.buffer, filename: `${asciiStem(img.filename, 0)}${ext}`, mime: MIME_BY_FORMAT[fmt] };
+}
+
+interface FormatResult {
+  report: string;
+  buffers: Buffer[];
+  savedPaths: string[];
+  usage: unknown;
+}
+
+/** Render an images API response (generations or edits) into the tool report. */
+async function formatImagesResult(
+  result: unknown,
+  ctx: { prefix: string; model: string; size: string; prompt: string; save: boolean; saveDir: string },
+): Promise<FormatResult> {
+  const typed = result as {
+    data?: { url?: string; revised_prompt?: string; b64_json?: string }[];
+    usage?: unknown;
+  };
+  const items = typed?.data ?? [];
+  if (!items.length) {
+    throw new ImageAPIError(`Upstream returned no images: ${JSON.stringify(result).slice(0, 300)}`);
+  }
+  const lines = [`${ctx.prefix} -> ${items.length} image(s) | model='${ctx.model}' size='${ctx.size}'.`];
+  const buffers: Buffer[] = [];
+  const savedPaths: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    lines.push(`\n[Image ${i + 1}]`);
+    if (item.url) lines.push(`image_url: ${item.url}`);
+    if (item.revised_prompt) lines.push(`revised_prompt: ${item.revised_prompt}`);
+    let data: Buffer | null = null;
+    if (item.url) {
+      try {
+        data = await download(item.url);
+      } catch (err) {
+        lines.push(`download: (failed: ${err instanceof Error ? err.message : String(err)})`);
+      }
+    } else if (item.b64_json) {
+      lines.push(`b64_json_length: ${item.b64_json.length}`);
+      data = Buffer.from(item.b64_json, "base64");
+    }
+    if (data) {
+      buffers.push(data);
+      if (ctx.save && ctx.saveDir) {
+        try {
+          const p = saveImageFile(data, ctx.prompt, ctx.saveDir);
+          lines.push(`saved_to: ${p}`);
+          savedPaths.push(p);
+        } catch (err) {
+          lines.push(`saved_to: (failed: ${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+    }
+  }
+  if (typed.usage) lines.push(`\nusage: ${JSON.stringify(typed.usage)}`);
+  return { report: lines.join("\n"), buffers, savedPaths, usage: typed.usage };
+}
+
+/** Inline JPEG previews (512px) as MCP image content blocks. */
+async function previewBlocks(buffers: Buffer[], count: number): Promise<{ type: "image"; data: string; mimeType: string }[]> {
+  const blocks: { type: "image"; data: string; mimeType: string }[] = [];
+  for (const buf of buffers.slice(0, count)) {
+    try {
+      const jpeg = await sharp(buf)
+        .rotate()
+        .resize({ width: 512, height: 512, fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 82 })
+        .toBuffer();
+      blocks.push({ type: "image", data: jpeg.toString("base64"), mimeType: "image/jpeg" });
+    } catch {
+      // Skip previews that fail to decode; the text report still carries URLs.
+    }
+  }
+  return blocks;
+}
+
+/** Strip the API key / bearer tokens from error text before returning to clients. */
+function redactError(err: unknown, cfg: AppConfig): string {
+  let msg = err instanceof Error ? err.message : String(err);
+  if (cfg.api_key) msg = msg.split(cfg.api_key).join("<redacted>");
+  msg = msg.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer <redacted>");
+  return msg.slice(0, 2000);
+}
+
+// --------------------------------------------------------------------------- //
 // Tool implementations                                                        //
 // --------------------------------------------------------------------------- //
 
@@ -256,7 +536,7 @@ async function generateImage(
     n?: number;
     save?: boolean;
   },
-): Promise<string> {
+): Promise<FormatResult> {
   if (!prompt || !prompt.trim()) throw new ImageAPIError("`prompt` must not be empty.");
   const cfg = loadConfig();
   if (!cfg.api_key) {
@@ -276,38 +556,96 @@ async function generateImage(
   };
   if (opts.quality) payload.quality = opts.quality;
 
-  const result = (await httpJson(
+  const result = await httpJson(
     `${cfg.api_base_url.replace(/\/+$/, "")}/images/generations`,
     cfg.api_key,
     { method: "POST", body: payload },
-  )) as { data?: { url?: string; revised_prompt?: string; b64_json?: string }[]; usage?: unknown };
+  );
 
-  const items = result?.data ?? [];
-  if (!items.length) throw new ImageAPIError(`Upstream returned no images: ${JSON.stringify(result).slice(0, 300)}`);
+  return formatImagesResult(result, {
+    prefix: "Generated",
+    model: String(payload.model),
+    size: String(payload.size),
+    prompt,
+    save: Boolean(opts.save),
+    saveDir: cfg.save_dir,
+  });
+}
 
-  const lines = [`Generated ${items.length} image(s) | model='${payload.model}' size='${payload.size}'.`];
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    lines.push(`\n[Image ${i + 1}]`);
-    if (item.url) lines.push(`image_url: ${item.url}`);
-    if (item.revised_prompt) lines.push(`revised_prompt: ${item.revised_prompt}`);
-    if (opts.save && item.url && cfg.save_dir) {
-      try {
-        const data = await download(item.url);
-        const slug = prompt.slice(0, 30).replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "image";
-        fs.mkdirSync(cfg.save_dir, { recursive: true });
-        const p = path.join(cfg.save_dir, `${Date.now()}_${slug}.png`);
-        fs.writeFileSync(p, data);
-        lines.push(`saved_to: ${p}`);
-      } catch (err) {
-        lines.push(`saved_to: (failed: ${err instanceof Error ? err.message : String(err)})`);
-      }
-    } else if (item.b64_json && !item.url) {
-      lines.push(`b64_json_length: ${item.b64_json.length}`);
-    }
+/**
+ * Image + text -> image (img2img). Uploads the input images (and optional mask)
+ * to the OpenAI-compatible /images/edits endpoint as multipart form data.
+ */
+async function editImage(
+  images: string[],
+  prompt: string,
+  opts: {
+    model?: string;
+    size?: string;
+    quality?: string;
+    n?: number;
+    save?: boolean;
+    mask?: string;
+  },
+): Promise<FormatResult> {
+  if (!prompt || !prompt.trim()) throw new ImageAPIError("`prompt` must not be empty.");
+  const refs = images.map((x) => String(x).trim()).filter(Boolean);
+  if (!refs.length) {
+    throw new ImageAPIError("`images` must contain at least one image reference.");
   }
-  if (result.usage) lines.push(`\nusage: ${JSON.stringify(result.usage)}`);
-  return lines.join("\n");
+  if (refs.length > 10) throw new ImageAPIError("`images` supports at most 10 images.");
+
+  const cfg = loadConfig();
+  if (!cfg.api_key) {
+    throw new ImageAPIError(
+      "API key is not set. Set the IMAGE_API_KEY environment variable, " +
+        "or use set_config(api_key=...).",
+    );
+  }
+  if (cfg.moderation.enabled) await moderate(prompt, cfg.moderation);
+
+  const files = await Promise.all(
+    refs.map((ref, i) => resolveImageInput(ref, i).then((img) => normalizeImage(img, `input image ${i + 1}`))),
+  );
+
+  const model = opts.model || cfg.model;
+  const size = opts.size || cfg.size;
+  const form = new FormData();
+  form.append("model", model);
+  form.append("prompt", prompt);
+  form.append("size", size);
+  form.append("n", String(Math.max(1, Math.min(Math.trunc(opts.n ?? 1), 10))));
+  form.append("response_format", "url");
+  if (opts.quality) form.append("quality", opts.quality);
+  // OpenAI convention: single input uses "image", multiple inputs use "image[]".
+  const field = files.length === 1 ? "image" : "image[]";
+  for (const f of files) {
+    form.append(field, new Blob([new Uint8Array(f.buffer)], { type: f.mime }), f.filename);
+  }
+  if (opts.mask) {
+    const maskRef = String(opts.mask).trim();
+    if (!maskRef) throw new ImageAPIError("`mask` must not be empty.");
+    const mask = await resolveImageInput(maskRef, 0).then((img) => normalizeImage(img, "mask"));
+    form.append("mask", new Blob([new Uint8Array(mask.buffer)], { type: mask.mime }), mask.filename);
+  }
+
+  const result = await httpJson(
+    `${cfg.api_base_url.replace(/\/+$/, "")}/images/edits`,
+    cfg.api_key,
+    { method: "POST", body: form },
+  );
+
+  return formatImagesResult(result, {
+    prefix:
+      `Edited ${files.length} input image(s)` +
+      (opts.mask ? " + mask" : "") +
+      ` (inputs: ${refs.map((r) => (r.length > 50 ? `${r.slice(0, 50)}...` : r)).join(", ")})`,
+    model,
+    size,
+    prompt,
+    save: Boolean(opts.save),
+    saveDir: cfg.save_dir,
+  });
 }
 
 async function listImageModels(): Promise<string> {
@@ -358,7 +696,7 @@ function updateModeration(updates: Partial<ModerationConfig>): string {
 // MCP server                                                                  //
 // --------------------------------------------------------------------------- //
 
-const server = new McpServer({ name: "GPT-image", version: "0.1.0" });
+const server = new McpServer({ name: "GPT-image", version: "0.3.0" });
 
 server.registerTool(
   "generate_image",
@@ -374,10 +712,15 @@ server.registerTool(
       quality: z.enum(["low", "medium", "high"]).optional().describe("Optional quality hint."),
       n: z.number().int().min(1).max(10).optional().describe("How many images (default 1)."),
       save: z.boolean().optional().describe("Also download each image to config save_dir."),
+      include_preview: z.boolean().optional().describe("Return inline JPEG previews (default true)."),
+      preview_count: z.number().int().min(0).max(4).optional().describe("How many previews (default 1)."),
     }),
   },
   async (args: Record<string, unknown>) => {
     try {
+      const includePreview = args.include_preview === undefined ? true : Boolean(args.include_preview);
+      const previewCount =
+        args.preview_count === undefined ? 1 : Math.max(0, Math.min(Math.trunc(Number(args.preview_count)), 4));
       const result = await generateImage(String(args.prompt), {
         model: args.model === undefined ? undefined : String(args.model),
         size: args.size === undefined ? undefined : String(args.size),
@@ -385,10 +728,90 @@ server.registerTool(
         n: args.n === undefined ? undefined : Number(args.n),
         save: args.save === undefined ? undefined : Boolean(args.save),
       });
-      return { content: [{ type: "text" as const, text: result }] };
+      const content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[] = [
+        { type: "text", text: result.report },
+      ];
+      if (includePreview) content.push(...(await previewBlocks(result.buffers, previewCount)));
+      return {
+        content,
+        structuredContent: {
+          ok: true,
+          kind: "generate",
+          files: result.savedPaths.map((p) => ({ path: p, uri: pathToFileURL(p).href })),
+          usage: result.usage ?? null,
+        },
+      };
     } catch (err) {
       return {
-        content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }],
+        content: [{ type: "text" as const, text: `Error: ${redactError(err, loadConfig())}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.registerTool(
+  "edit_image",
+  {
+    title: "Edit image(s) (img2img)",
+    description:
+      "Edit, transform, combine or extend one or more input images following a text " +
+      "prompt (image + text to image, aka img2img / 图生图) via the configured " +
+      "OpenAI-compatible images/edits API. Each image reference can be a local file " +
+      "path, an http(s) URL, a data: URI, or raw base64. Returns the edited image " +
+      "URL(s) and metadata; optionally saves locally.",
+    inputSchema: z.object({
+      images: z
+        .union([z.string(), z.array(z.string()).min(1).max(10)])
+        .describe(
+          "1-10 input image references: local file path, http(s) URL, data: URI or " +
+            "raw base64. A single string is also accepted.",
+        ),
+      prompt: z.string().describe("What to change or how to transform the image(s)."),
+      mask: z.string().optional().describe(
+        "Optional mask image (local path / URL / data URI / base64) marking the " +
+          "region to regenerate; applies to the first input image.",
+      ),
+      model: z.string().optional().describe("Model id; defaults to config model (e.g. gpt-image-2)."),
+      size: z.string().optional().describe("e.g. 1024x1024 / 1024x1536 / 1536x1024."),
+      quality: z.enum(["low", "medium", "high"]).optional().describe("Optional quality hint."),
+      n: z.number().int().min(1).max(10).optional().describe("How many images (default 1)."),
+      save: z.boolean().optional().describe("Also download each image to config save_dir."),
+      include_preview: z.boolean().optional().describe("Return inline JPEG previews (default true)."),
+      preview_count: z.number().int().min(0).max(4).optional().describe("How many previews (default 1)."),
+    }),
+  },
+  async (args: Record<string, unknown>) => {
+    try {
+      const includePreview = args.include_preview === undefined ? true : Boolean(args.include_preview);
+      const previewCount =
+        args.preview_count === undefined ? 1 : Math.max(0, Math.min(Math.trunc(Number(args.preview_count)), 4));
+      const raw = args.images;
+      const images = (Array.isArray(raw) ? raw : [raw]).map((x) => String(x));
+      const result = await editImage(images, String(args.prompt), {
+        model: args.model === undefined ? undefined : String(args.model),
+        size: args.size === undefined ? undefined : String(args.size),
+        quality: args.quality === undefined ? undefined : String(args.quality),
+        n: args.n === undefined ? undefined : Number(args.n),
+        save: args.save === undefined ? undefined : Boolean(args.save),
+        mask: args.mask === undefined ? undefined : String(args.mask),
+      });
+      const content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[] = [
+        { type: "text", text: result.report },
+      ];
+      if (includePreview) content.push(...(await previewBlocks(result.buffers, previewCount)));
+      return {
+        content,
+        structuredContent: {
+          ok: true,
+          kind: "edit",
+          files: result.savedPaths.map((p) => ({ path: p, uri: pathToFileURL(p).href })),
+          usage: result.usage ?? null,
+        },
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text" as const, text: `Error: ${redactError(err, loadConfig())}` }],
         isError: true,
       };
     }

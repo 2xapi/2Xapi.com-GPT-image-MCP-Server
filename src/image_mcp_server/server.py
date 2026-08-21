@@ -21,23 +21,30 @@ Config schema (config.json):
     }
 
 Tools:
-  * ``generate_image``   — generate image(s) from a text prompt
+  * ``generate_image``   — generate image(s) from a text prompt (text -> image)
+  * ``edit_image``       — edit input image(s) following a text prompt (image+text -> image)
   * ``get_config``       — show current config (API key masked)
   * ``set_config``       — update one or more config fields, persisted to disk
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
+import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import CallToolResult, ImageContent, TextContent
 
 # --------------------------------------------------------------------------- #
 # Built-in defaults (used when a field is missing from config.json)           #
@@ -70,6 +77,20 @@ USER_AGENT = (
 
 # Known image-capable model ids, for flagging in list output.
 _KNOWN_IMAGE_MODEL_HINTS = {"gpt-image-2", "dall-e-3", "dall-e-2", "stable-diffusion"}
+
+# Input image guards: real-format sniffing, 50 MB hard cap. Auto-downscale is
+# NOT done here (no image lib by default) — oversized files are rejected with a
+# hint, unlike the npm edition which uses sharp.
+MAX_INPUT_BYTES = 50 * 1024 * 1024
+_EXT_BY_FORMAT = {"png": ".png", "jpeg": ".jpg", "webp": ".webp", "gif": ".gif"}
+_MIME_BY_FORMAT = {"png": "image/png", "jpeg": "image/jpeg", "webp": "image/webp", "gif": "image/gif"}
+
+try:  # Optional: inline JPEG previews when Pillow is installed.
+    from PIL import Image as _PILImage  # type: ignore[import-not-found]
+
+    _HAS_PIL = True
+except ImportError:
+    _HAS_PIL = False
 
 # Where the config file lives.
 _CONFIG_PATH = Path(os.environ.get("IMAGE_CONFIG_PATH") or (Path(__file__).resolve().parent / "config.json"))
@@ -165,6 +186,40 @@ def _post_json(url: str, payload: dict[str, Any], api_key: str, *, timeout: floa
         raise ImageAPIError(f"Upstream returned non-JSON: {raw[:200]}") from exc
 
 
+def _post_multipart(
+    url: str,
+    body: bytes,
+    content_type: str,
+    api_key: str,
+    *,
+    timeout: float = 300.0,
+) -> dict[str, Any]:
+    """POST a raw multipart/form-data body and return the parsed JSON response."""
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": content_type,
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise ImageAPIError(f"Upstream HTTP {exc.code}: {detail[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise ImageAPIError(f"Could not reach {url}: {exc.reason}") from exc
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ImageAPIError(f"Upstream returned non-JSON: {raw[:200]}") from exc
+
+
 def _get_json(url: str, api_key: str, *, timeout: float = 30.0) -> dict[str, Any]:
     req = urllib.request.Request(
         url,
@@ -198,6 +253,287 @@ def _save_to_disk(data: bytes, *, prompt: str, ext: str, save_dir: str) -> str:
     with open(path, "wb") as fh:
         fh.write(data)
     return path
+
+
+# --------------------------------------------------------------------------- #
+# Image input resolution (for edit_image)                                     #
+# --------------------------------------------------------------------------- #
+_MIME_BY_EXT = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+_EXT_BY_MIME = {v: k for k, v in _MIME_BY_EXT.items()}
+_RAW_BASE64_RE = re.compile(r"^[A-Za-z0-9+/=\s]+$")
+
+
+def _mime_for(name: str) -> str:
+    return _MIME_BY_EXT.get(os.path.splitext(name)[1].lower(), "image/png")
+
+
+# --------------------------------------------------------------------------- #
+# Path allowlist: local image inputs must live under home or IMAGE_ALLOWED_ROOTS
+# --------------------------------------------------------------------------- #
+def _allowed_roots() -> list[str]:
+    home = str(Path.home())
+    extra = [
+        str(Path(p).expanduser().resolve())
+        for p in os.environ.get("IMAGE_ALLOWED_ROOTS", "").split(os.pathsep)
+        if p.strip()
+    ]
+    return list(dict.fromkeys([home, *extra]))
+
+
+def _is_within(candidate: str, root: str) -> bool:
+    rel = os.path.relpath(candidate, root)
+    return rel == "." or (not rel.startswith("..") and not os.path.isabs(rel))
+
+
+def _assert_allowed_path(p: str) -> None:
+    resolved = str(Path(p).resolve())
+    if not any(_is_within(resolved, root) for root in _allowed_roots()):
+        raise ImageAPIError(
+            f"Path {p} is outside the allowed roots (home + IMAGE_ALLOWED_ROOTS). "
+            "Add the directory to IMAGE_ALLOWED_ROOTS to read it."
+        )
+
+
+def _sniff_image(data: bytes) -> str | None:
+    """Detect the real image format from magic bytes; None if not a known image."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpeg"
+    if data[:4] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _normalize_image(data: bytes, filename: str, label: str) -> tuple[bytes, str, str]:
+    """Validate + normalize an input image: 50 MB cap and real-format sniffing.
+
+    Returns ``(data, filename, mime)`` with the filename extension aligned to
+    the detected format (a "cat.jpg" that is actually a PNG uploads as cat.png).
+    """
+    if len(data) > MAX_INPUT_BYTES:
+        raise ImageAPIError(f"{label} exceeds the 50 MB upload limit.")
+    fmt = _sniff_image(data)
+    if not fmt:
+        raise ImageAPIError(f"{label} is not a valid image file.")
+    return data, f"{_ascii_safe_stem(filename)}{_EXT_BY_FORMAT[fmt]}", _MIME_BY_FORMAT[fmt]
+
+
+def _ascii_safe_stem(name: str) -> str:
+    stem, _ = os.path.splitext(os.path.basename(name))
+    return (re.sub(r"[^A-Za-z0-9_-]+", "-", stem).strip("-") or "image")[:40]
+
+
+def _preview_jpeg(data: bytes) -> str | None:
+    """Inline JPEG preview (512px, base64) when Pillow is available; else None."""
+    if not _HAS_PIL:
+        return None
+    try:
+        import io
+
+        with _PILImage.open(io.BytesIO(data)) as im:
+            im.thumbnail((512, 512))
+            if im.mode != "RGB":
+                im = im.convert("RGB")
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=82)
+            return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:  # noqa: BLE001 - preview is best-effort
+        return None
+
+
+def _redact_error(err: Exception, cfg: dict[str, Any]) -> str:
+    msg = str(err)
+    key = cfg.get("api_key") or ""
+    if key:
+        msg = msg.replace(key, "<redacted>")
+    msg = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <redacted>", msg, flags=re.IGNORECASE)
+    return msg[:2000]
+
+
+def _ascii_safe_name(name: str, index: int) -> str:
+    """ASCII-safe multipart filename: keep a known extension, sanitize the stem."""
+    stem, ext = os.path.splitext(os.path.basename(name))
+    ext = ext.lower()
+    if ext not in _MIME_BY_EXT:
+        ext = ".png"
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", stem).strip("-") or f"image{index + 1}"
+    return f"{cleaned[:40]}{ext}"
+
+
+def _resolve_image(ref: str, index: int) -> tuple[bytes, str, str]:
+    """Turn an image reference into ``(data, filename, mime)``.
+
+    Accepted forms: local file path, http(s) URL, ``data:image/...;base64,...``
+    URI, or raw base64 text.
+    """
+    s = ref.strip()
+    if not s:
+        raise ImageAPIError("Image reference must not be empty.")
+
+    m = re.match(r"^data:(image/[a-z0-9.+-]+);base64,(.*)$", s, re.IGNORECASE | re.DOTALL)
+    if m:
+        mime = m.group(1).lower()
+        try:
+            data = base64.b64decode(m.group(2))
+        except (binascii.Error, ValueError) as exc:
+            raise ImageAPIError(f"Invalid base64 in data: URI: {exc}") from exc
+        if not data:
+            raise ImageAPIError("data: URI contains no image data.")
+        return data, f"image{index + 1}{_EXT_BY_MIME.get(mime, '.png')}", mime
+
+    if s.lower().startswith(("http://", "https://")):
+        try:
+            data = _download(s)
+        except Exception as exc:  # noqa: BLE001
+            raise ImageAPIError(f"Could not download image {s}: {exc}") from exc
+        if not data:
+            raise ImageAPIError(f"Image URL returned no data: {s}")
+        name = urllib.parse.unquote(urllib.parse.urlparse(s).path.rsplit("/", 1)[-1])
+        return data, _ascii_safe_name(name or f"image{index + 1}", index), _mime_for(name or "x.png")
+
+    p = Path(s)
+    if p.is_file():
+        _assert_allowed_path(s)
+        data = p.read_bytes()
+        if not data:
+            raise ImageAPIError(f"Image file is empty: {s}")
+        return data, _ascii_safe_name(p.name, index), _mime_for(p.name)
+
+    if len(s) >= 64 and _RAW_BASE64_RE.fullmatch(s):
+        data = base64.b64decode(s)
+        if data:
+            return data, f"image{index + 1}.png", "image/png"
+
+    raise ImageAPIError(
+        f"Unrecognized image input: {s[:60]!r}. "
+        "Provide a local file path, an http(s) URL, a data: URI, or raw base64."
+    )
+
+
+def _build_multipart(
+    fields: list[tuple[str, str]],
+    files: list[tuple[str, str, bytes, str]],
+) -> tuple[bytes, str]:
+    """Assemble a multipart/form-data body; returns ``(body, content_type)``."""
+    boundary = "----gptimage" + uuid.uuid4().hex
+    parts: list[bytes] = []
+    for name, value in fields:
+        parts.append(
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"'
+                f"\r\n\r\n{value}\r\n"
+            ).encode("utf-8")
+        )
+    for name, filename, data, mime in files:
+        parts.append(
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; '
+                f'filename="{filename}"\r\nContent-Type: {mime}\r\n\r\n'
+            ).encode("utf-8")
+            + data
+            + b"\r\n"
+        )
+    parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+def _render_result(
+    result: dict[str, Any],
+    *,
+    prefix: str,
+    use_model: str,
+    use_size: str,
+    prompt: str,
+    save: bool,
+    save_dir: str,
+) -> dict[str, Any]:
+    """Render an images API response (generations or edits) into the tool report.
+
+    Returns ``{"report", "buffers", "saved_paths", "usage"}`` so callers can
+    attach inline previews and structured content.
+    """
+    items = (result or {}).get("data") or []
+    if not items:
+        raise ImageAPIError(f"Upstream returned no images: {json.dumps(result)[:300]}")
+
+    lines = [f"{prefix} -> {len(items)} image(s) | model='{use_model}' size='{use_size}'."]
+    buffers: list[bytes] = []
+    saved_paths: list[str] = []
+    for idx, item in enumerate(items, 1):
+        url = item.get("url", "") or ""
+        revised = item.get("revised_prompt", "") or ""
+        b64 = item.get("b64_json", "") or ""
+        lines.append(f"\n[Image {idx}]")
+        if url:
+            lines.append(f"image_url: {url}")
+        if revised:
+            lines.append(f"revised_prompt: {revised}")
+        data: bytes | None = None
+        if url:
+            try:
+                data = _download(url)
+            except Exception as exc:  # noqa: BLE001
+                lines.append(f"download: (failed: {exc})")
+        elif b64:
+            lines.append(f"b64_json_length: {len(b64)}")
+            data = base64.b64decode(b64)
+        if data:
+            buffers.append(data)
+            if save and save_dir:
+                try:
+                    local = _save_to_disk(data, prompt=prompt, ext="png", save_dir=save_dir)
+                    lines.append(f"saved_to: {local}")
+                    saved_paths.append(local)
+                except Exception as exc:  # noqa: BLE001
+                    lines.append(f"saved_to: (failed: {exc})")
+
+    usage = (result or {}).get("usage")
+    if usage:
+        lines.append(f"\nusage: {json.dumps(usage)}")
+    return {"report": "\n".join(lines), "buffers": buffers, "saved_paths": saved_paths, "usage": usage}
+
+
+def _tool_response(
+    kind: str,
+    report: str,
+    buffers: list[bytes],
+    saved: list[str],
+    usage: Any,
+    include_preview: bool = True,
+) -> CallToolResult:
+    """Assemble the MCP tool result: text report + optional JPEG previews + structured content."""
+    content: list[TextContent | ImageContent] = [TextContent(type="text", text=report)]
+    if include_preview:
+        for data in buffers:
+            b64 = _preview_jpeg(data)
+            if b64:
+                content.append(ImageContent(type="image", data=b64, mime_type="image/jpeg"))
+    return CallToolResult(
+        content=content,
+        structured_content={
+            "ok": True,
+            "kind": kind,
+            "files": [{"path": p, "uri": Path(p).as_uri()} for p in saved],
+            "usage": usage or None,
+        },
+    )
+
+
+def _run_guarded(fn, cfg: dict[str, Any]):
+    """Run a tool body, re-raising any error with the API key redacted."""
+    try:
+        return fn()
+    except Exception as exc:  # noqa: BLE001
+        raise ImageAPIError(_redact_error(exc, cfg)) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -263,7 +599,7 @@ def _moderate(prompt: str, mod: dict[str, Any]) -> None:
 # --------------------------------------------------------------------------- #
 # Server & tools                                                              #
 # --------------------------------------------------------------------------- #
-mcp = MCPServer("GPT-image")
+mcp = MCPServer("GPT-image", version="0.3.0")
 
 
 @mcp.tool(
@@ -419,7 +755,8 @@ def generate_image(
     quality: str | None = None,
     n: int = 1,
     save: bool = False,
-) -> str:
+    include_preview: bool = True,
+) -> CallToolResult:
     """Generate an image from a text prompt.
 
     Args:
@@ -429,71 +766,182 @@ def generate_image(
         quality: Optional quality hint (``low`` / ``medium`` / ``high``).
         n: How many images to generate (default 1, max 10).
         save: When true, also download each image to config ``save_dir``.
+        include_preview: When true (default), attach inline JPEG previews when
+            Pillow is installed.
 
     Returns:
-        A text report with the image URL(s) and metadata.
+        MCP tool result: text report with image URL(s) and metadata, optional
+        inline JPEG previews (when Pillow is installed), and structured content.
     """
-    if not prompt or not prompt.strip():
-        raise ValueError("`prompt` must not be empty.")
-
     with _lock:
         cfg = _load_config()
+    try:
+        if not prompt or not prompt.strip():
+            raise ValueError("`prompt` must not be empty.")
 
-    if not cfg["api_key"]:
-        raise ImageAPIError(
-            "API key is not set. Use set_config(api_key=...) or edit the config file."
+        if not cfg["api_key"]:
+            raise ImageAPIError(
+                "API key is not set. Use set_config(api_key=...) or edit the config file."
+            )
+
+        api_base = cfg["api_base_url"].rstrip("/")
+        use_model = model or cfg["model"]
+        use_size = size or cfg["size"]
+        save_dir = cfg["save_dir"]
+
+        # Pre-generation moderation gate. Raises ModerationError if denied;
+        # fails open (lets the request through) if the endpoint is unreachable.
+        mod = cfg.get("moderation") or {}
+        if mod.get("enabled"):
+            _moderate(prompt, mod)
+
+        payload: dict[str, Any] = {
+            "model": use_model,
+            "prompt": prompt,
+            "size": use_size,
+            "n": max(1, min(int(n), 10)),
+            "response_format": "url",
+        }
+        if quality:
+            payload["quality"] = quality
+
+        result = _post_json(f"{api_base}/images/generations", payload, cfg["api_key"])
+        rendered = _render_result(
+            result,
+            prefix="Generated",
+            use_model=use_model,
+            use_size=use_size,
+            prompt=prompt,
+            save=save,
+            save_dir=save_dir,
         )
+        return _tool_response(
+            "generate", rendered["report"], rendered["buffers"], rendered["saved_paths"], rendered["usage"],
+            include_preview=include_preview,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise ImageAPIError(_redact_error(exc, cfg)) from exc
 
-    api_base = cfg["api_base_url"].rstrip("/")
-    use_model = model or cfg["model"]
-    use_size = size or cfg["size"]
-    save_dir = cfg["save_dir"]
 
-    # Pre-generation moderation gate. Raises ModerationError if denied;
-    # fails open (lets the request through) if the endpoint is unreachable.
-    mod = cfg.get("moderation") or {}
-    if mod.get("enabled"):
-        _moderate(prompt, mod)
+@mcp.tool(
+    name="edit_image",
+    title="Edit image(s) (img2img)",
+    description=(
+        "Edit, transform, combine or extend one or more input images following a "
+        "text prompt (image + text to image, aka img2img) via the configured "
+        "OpenAI-compatible images/edits API. Each image reference can be a local "
+        "file path, an http(s) URL, a data: URI, or raw base64. An optional mask "
+        "marks the region to regenerate. Returns the edited image URL(s) and "
+        "metadata; optionally saves locally. Endpoint, key and default model come "
+        "from config (see get_config / set_config)."
+    ),
+)
+def edit_image(
+    images: "str | list[str]",
+    prompt: str,
+    model: str | None = None,
+    size: str | None = None,
+    quality: str | None = None,
+    n: int = 1,
+    save: bool = False,
+    mask: str | None = None,
+    include_preview: bool = True,
+) -> CallToolResult:
+    """Edit input image(s) following a text prompt (image+text -> image).
 
-    payload: dict[str, Any] = {
-        "model": use_model,
-        "prompt": prompt,
-        "size": use_size,
-        "n": max(1, min(int(n), 10)),
-        "response_format": "url",
-    }
-    if quality:
-        payload["quality"] = quality
+    Args:
+        images: 1-10 image references — local file path, http(s) URL, data: URI
+            or raw base64. A single string is also accepted.
+        prompt: What to change or how to transform the image(s).
+        model: Model id; defaults to config ``model`` (e.g. ``gpt-image-2``).
+        size: Size such as ``1024x1024`` / ``1024x1536`` / ``1536x1024``.
+        quality: Optional quality hint (``low`` / ``medium`` / ``high``).
+        n: How many images to generate (default 1, max 10).
+        save: When true, also download each image to config ``save_dir``.
+        mask: Optional mask image (local path / URL / data URI / base64) marking
+            the region to regenerate; applies to the first input image.
+        include_preview: When true (default), attach inline JPEG previews when
+            Pillow is installed.
 
-    result = _post_json(f"{api_base}/images/generations", payload, cfg["api_key"])
-    items = (result or {}).get("data") or []
-    if not items:
-        raise ImageAPIError(f"Upstream returned no images: {json.dumps(result)[:300]}")
+    Returns:
+        MCP tool result: text report with the edited image URL(s) and metadata,
+        optional inline JPEG previews (when Pillow is installed), and structured
+        content.
+    """
+    with _lock:
+        cfg = _load_config()
+    try:
+        if not prompt or not prompt.strip():
+            raise ValueError("`prompt` must not be empty.")
+        raw = images if isinstance(images, list) else [images]
+        refs = [str(x).strip() for x in raw if str(x).strip()]
+        if not refs:
+            raise ValueError("`images` must contain at least one image reference.")
+        if len(refs) > 10:
+            raise ValueError("`images` supports at most 10 images.")
 
-    lines = [f"Generated {len(items)} image(s) | model='{use_model}' size='{use_size}'."]
-    for idx, item in enumerate(items, 1):
-        url = item.get("url", "") or ""
-        revised = item.get("revised_prompt", "") or ""
-        b64 = item.get("b64_json", "") or ""
-        lines.append(f"\n[Image {idx}]")
-        if url:
-            lines.append(f"image_url: {url}")
-        if revised:
-            lines.append(f"revised_prompt: {revised}")
-        if save and url and save_dir:
-            try:
-                data = _download(url)
-                local = _save_to_disk(data, prompt=prompt, ext="png", save_dir=save_dir)
-                lines.append(f"saved_to: {local}")
-            except Exception as exc:  # noqa: BLE001
-                lines.append(f"saved_to: (failed: {exc})")
-        elif b64 and not url:
-            lines.append(f"b64_json_length: {len(b64)}")
+        if not cfg["api_key"]:
+            raise ImageAPIError(
+                "API key is not set. Use set_config(api_key=...) or edit the config file."
+            )
 
-    usage = result.get("usage")
-    if usage:
-        lines.append(f"\nusage: {json.dumps(usage)}")
-    return "\n".join(lines)
+        api_base = cfg["api_base_url"].rstrip("/")
+        use_model = model or cfg["model"]
+        use_size = size or cfg["size"]
+        save_dir = cfg["save_dir"]
+
+        # Pre-generation moderation gate — same as generate_image.
+        mod = cfg.get("moderation") or {}
+        if mod.get("enabled"):
+            _moderate(prompt, mod)
+
+        files = []
+        for i, ref in enumerate(refs):
+            data, fname, _mime = _resolve_image(ref, i)
+            files.append(_normalize_image(data, fname, f"input image {i + 1}"))
+
+        fields: list[tuple[str, str]] = [
+            ("model", use_model),
+            ("prompt", prompt),
+            ("size", use_size),
+            ("n", str(max(1, min(int(n), 10)))),
+            ("response_format", "url"),
+        ]
+        if quality:
+            fields.append(("quality", quality))
+        # OpenAI convention: single input uses "image", multiple inputs use "image[]".
+        field_name = "image" if len(files) == 1 else "image[]"
+        uploads = [(field_name, filename, data, mime) for data, filename, mime in files]
+        mask_note = ""
+        if mask:
+            mask_ref = str(mask).strip()
+            if not mask_ref:
+                raise ValueError("`mask` must not be empty.")
+            mdata, mname, _mmime = _resolve_image(mask_ref, 0)
+            mdata, mname, mmime = _normalize_image(mdata, mname, "mask")
+            uploads.append(("mask", mname, mdata, mmime))
+            mask_note = " + mask"
+        body, content_type = _build_multipart(fields, uploads)
+
+        result = _post_multipart(
+            f"{api_base}/images/edits", body, content_type, cfg["api_key"]
+        )
+        inputs_summary = ", ".join(r if len(r) <= 50 else r[:50] + "..." for r in refs)
+        rendered = _render_result(
+            result,
+            prefix=f"Edited {len(files)} input image(s){mask_note} (inputs: {inputs_summary})",
+            use_model=use_model,
+            use_size=use_size,
+            prompt=prompt,
+            save=save,
+            save_dir=save_dir,
+        )
+        return _tool_response(
+            "edit", rendered["report"], rendered["buffers"], rendered["saved_paths"], rendered["usage"],
+            include_preview=include_preview,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise ImageAPIError(_redact_error(exc, cfg)) from exc
 
 
 @mcp.tool(

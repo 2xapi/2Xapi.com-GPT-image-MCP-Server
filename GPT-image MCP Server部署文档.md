@@ -11,13 +11,14 @@
 
 ## 它能做什么
 
-一个 MCP 服务器，把 OpenAI 兼容的文生图接口封装成工具。接入客户端后，**对话里说「画一只柴犬」就能出图**。
+一个 MCP 服务器，把 OpenAI 兼容的文生图/图生图接口封装成工具。接入客户端后，**对话里说「画一只柴犬」就能出图**，发一张图说「改成动漫风」就能改图。
 
-提供 5 个工具：
+提供 6 个工具：
 
 | 工具 | 作用 |
 | --- | --- |
 | `generate_image` | 文生图，返回图片 URL（可自动存本地）|
+| `edit_image` | 图生图（图文生图）：传 1-10 张图 + 文字指令，改图 / 合成 / 扩图；支持 mask 局部重绘 |
 | `get_config` | 查看当前配置（API Key 自动打码显示）|
 | `set_config` | 对话里改端点 / Key / 模型 / 尺寸，改完立即生效，**不用重启** |
 | `set_moderation` | 配置 AI 审核闸门（可选，见「AI 审核」）|
@@ -79,13 +80,13 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 ### Claude Code（一行命令）
 
 ```bash
-claude mcp add -s user gpt-image --env IMAGE_API_KEY=你的key -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.1.0/gpt-image-mcp-server-0.1.0.tgz
+claude mcp add -s user gpt-image --env IMAGE_API_KEY=你的key -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.0/gpt-image-mcp-server-0.3.0.tgz
 ```
 
 ### Codex（一行命令）
 
 ```bash
-codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.1.0/gpt-image-mcp-server-0.1.0.tgz
+codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.0/gpt-image-mcp-server-0.3.0.tgz
 ```
 
 ### Claude Desktop / Cursor（手动配置）
@@ -97,7 +98,7 @@ codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y https://github.c
   "mcpServers": {
     "GPT-image": {
       "command": "npx",
-      "args": ["-y", "https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.1.0/gpt-image-mcp-server-0.1.0.tgz"],
+      "args": ["-y", "https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.0/gpt-image-mcp-server-0.3.0.tgz"],
       "env": {
         "IMAGE_API_KEY": "你的key"
       }
@@ -119,7 +120,7 @@ codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y https://github.c
 > - 要用**其他 API 端点**（OpenAI 官方 / Azure / 其他中转站），请**自己更换**：设置环境变量 `IMAGE_API_BASE_URL=https://你的端点/v1`，或改 `config.json` 的 `api_base_url`；
 > - 更换后 key 必须与该端点配套，否则 401。
 >
-> 升级版本：更新 GitHub Release 里的 tgz（版本号变化时同步改 URL 中的 `v0.1.0` 和文件名）。
+> 升级版本：更新 GitHub Release 里的 tgz（版本号变化时同步改 URL 中的 `v0.3.0` 和文件名）。
 
 ---
 
@@ -356,6 +357,8 @@ pwd                                         # →  当前所在目录，即部�
 | 「设个保存目录 ~/Pictures/gen」 | `set_config(save_dir="...")` |
 | 「列出后端有哪些模型」 | `list_image_models()` |
 | 「画一只柴犬，竖图」 | `generate_image(prompt=..., size="1024x1536")` |
+| 「把这张图改成动漫风」 | `edit_image(images=["/path/to/photo.jpg"], prompt="改成动漫风")` |
+| 「只重绘帽子区域」 | `edit_image(images=["a.png"], prompt="换帽子", mask="mask.png")`（需后端支持 mask） |
 
 ---
 

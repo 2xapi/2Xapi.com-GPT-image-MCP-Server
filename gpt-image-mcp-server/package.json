@@ -1,7 +1,7 @@
 {
   "name": "gpt-image-mcp-server",
-  "version": "0.1.0",
-  "description": "MCP server for text-to-image generation via an OpenAI-compatible images API. One-command install: npx gpt-image-mcp-server",
+  "version": "0.3.0",
+  "description": "MCP server for text-to-image and image-to-image (edit) generation via an OpenAI-compatible images API. One-command install: npx gpt-image-mcp-server",
   "type": "module",
   "bin": {
     "gpt-image-mcp-server": "dist/index.js"
@@ -19,12 +19,21 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "sharp": "^0.35.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.8.0"
   },
   "license": "MIT",
-  "keywords": ["mcp", "image", "text-to-image", "gpt-image", "openai-compatible"]
+  "keywords": [
+    "mcp",
+    "image",
+    "text-to-image",
+    "image-to-image",
+    "img2img",
+    "gpt-image",
+    "openai-compatible"
+  ]
 }

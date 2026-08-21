@@ -1,7 +1,7 @@
 [project]
 name = "image-mcp-server"
-version = "0.1.0"
-description = "MCP server for text-to-image generation via an OpenAI-compatible images API (2xa.cc.cd)."
+version = "0.3.0"
+description = "MCP server for text-to-image and image-to-image (edit) generation via an OpenAI-compatible images API (2xa.cc.cd)."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "wenkezhi" }]
