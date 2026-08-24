@@ -80,13 +80,13 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 ### Claude Code（一行命令）
 
 ```bash
-claude mcp add -s user gpt-image --env IMAGE_API_KEY=你的key -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.0/gpt-image-mcp-server-0.3.0.tgz
+claude mcp add -s user gpt-image --env IMAGE_API_KEY=你的key -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.1/gpt-image-mcp-server-0.3.1.tgz
 ```
 
 ### Codex（一行命令）
 
 ```bash
-codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.0/gpt-image-mcp-server-0.3.0.tgz
+codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.1/gpt-image-mcp-server-0.3.1.tgz
 ```
 
 ### Claude Desktop / Cursor（手动配置）
@@ -98,7 +98,7 @@ codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y https://github.c
   "mcpServers": {
     "GPT-image": {
       "command": "npx",
-      "args": ["-y", "https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.0/gpt-image-mcp-server-0.3.0.tgz"],
+      "args": ["-y", "https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.1/gpt-image-mcp-server-0.3.1.tgz"],
       "env": {
         "IMAGE_API_KEY": "你的key"
       }
@@ -120,7 +120,7 @@ codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y https://github.c
 > - 要用**其他 API 端点**（OpenAI 官方 / Azure / 其他中转站），请**自己更换**：设置环境变量 `IMAGE_API_BASE_URL=https://你的端点/v1`，或改 `config.json` 的 `api_base_url`；
 > - 更换后 key 必须与该端点配套，否则 401。
 >
-> 升级版本：更新 GitHub Release 里的 tgz（版本号变化时同步改 URL 中的 `v0.3.0` 和文件名）。
+> 升级版本：更新 GitHub Release 里的 tgz（版本号变化时同步改 URL 中的 `v0.3.1` 和文件名）。
 
 ---
 

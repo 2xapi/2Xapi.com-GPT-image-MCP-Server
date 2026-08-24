@@ -696,7 +696,7 @@ function updateModeration(updates: Partial<ModerationConfig>): string {
 // MCP server                                                                  //
 // --------------------------------------------------------------------------- //
 
-const server = new McpServer({ name: "GPT-image", version: "0.3.0" });
+const server = new McpServer({ name: "GPT-image", version: "0.3.1" });
 
 server.registerTool(
   "generate_image",
@@ -712,13 +712,15 @@ server.registerTool(
       quality: z.enum(["low", "medium", "high"]).optional().describe("Optional quality hint."),
       n: z.number().int().min(1).max(10).optional().describe("How many images (default 1)."),
       save: z.boolean().optional().describe("Also download each image to config save_dir."),
-      include_preview: z.boolean().optional().describe("Return inline JPEG previews (default true)."),
+      include_preview: z.boolean().optional().describe(
+        "Return inline JPEG previews (default false; enable only if your client renders MCP image blocks — some Responses-streaming clients fail on them).",
+      ),
       preview_count: z.number().int().min(0).max(4).optional().describe("How many previews (default 1)."),
     }),
   },
   async (args: Record<string, unknown>) => {
     try {
-      const includePreview = args.include_preview === undefined ? true : Boolean(args.include_preview);
+      const includePreview = args.include_preview === undefined ? false : Boolean(args.include_preview);
       const previewCount =
         args.preview_count === undefined ? 1 : Math.max(0, Math.min(Math.trunc(Number(args.preview_count)), 4));
       const result = await generateImage(String(args.prompt), {
@@ -777,13 +779,15 @@ server.registerTool(
       quality: z.enum(["low", "medium", "high"]).optional().describe("Optional quality hint."),
       n: z.number().int().min(1).max(10).optional().describe("How many images (default 1)."),
       save: z.boolean().optional().describe("Also download each image to config save_dir."),
-      include_preview: z.boolean().optional().describe("Return inline JPEG previews (default true)."),
+      include_preview: z.boolean().optional().describe(
+        "Return inline JPEG previews (default false; enable only if your client renders MCP image blocks — some Responses-streaming clients fail on them).",
+      ),
       preview_count: z.number().int().min(0).max(4).optional().describe("How many previews (default 1)."),
     }),
   },
   async (args: Record<string, unknown>) => {
     try {
-      const includePreview = args.include_preview === undefined ? true : Boolean(args.include_preview);
+      const includePreview = args.include_preview === undefined ? false : Boolean(args.include_preview);
       const previewCount =
         args.preview_count === undefined ? 1 : Math.max(0, Math.min(Math.trunc(Number(args.preview_count)), 4));
       const raw = args.images;

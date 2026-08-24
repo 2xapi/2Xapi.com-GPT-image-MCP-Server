@@ -20,7 +20,7 @@ for arg in "$@"; do
 done
 
 # ---------- tgz 下载地址（GitHub Release） ----------
-TGZ_URL="https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.0/gpt-image-mcp-server-0.3.0.tgz"
+TGZ_URL="https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.1/gpt-image-mcp-server-0.3.1.tgz"
 
 # ---------- 0. 检查 key ----------
 if [ -z "${IMAGE_API_KEY:-}" ]; then

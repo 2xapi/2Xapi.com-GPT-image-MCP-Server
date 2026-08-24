@@ -3,7 +3,7 @@
 本仓库是 **GPT-image MCP Server**：把 OpenAI 兼容的文生图/图生图接口封装成 MCP 工具。
 
 **你的任务（当用户说“部署 / 一键部署 / 配置这个 MCP / 帮我接入”时）**：
-把本项目作为 MCP server 接入用户指定的客户端（Codex / Claude Code / Claude Desktop / Cursor），让用户能在对话里说「画一只柴犬」直接出图、发一张图说「改成动漫风」就能改图（`edit_image`，图片支持本地路径 / URL / data URI / base64，支持 mask 局部重绘；输出带内联预览与结构化结果）。
+把本项目作为 MCP server 接入用户指定的客户端（Codex / Claude Code / Claude Desktop / Cursor），让用户能在对话里说「画一只柴犬」直接出图、发一张图说「改成动漫风」就能改图（`edit_image`，图片支持本地路径 / URL / data URI / base64，支持 mask 局部重绘；内联图片预览默认关闭（`include_preview=true` 开启），输出带结构化结果）。
 
 ## 关键规则
 

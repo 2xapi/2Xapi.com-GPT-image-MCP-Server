@@ -45,7 +45,7 @@ codex mcp add GPT-image --env IMAGE_API_KEY=你的key -- npx -y gpt-image-mcp-se
 
 > key 与端点必须配套：你的 key 是哪家供应商的，端点就填哪家的。
 
-输入图 ≤50MB，本地路径必须在白名单内；sharp 校验真实格式，超 4MB 或 1024px 自动压缩；输出默认带 512px JPEG 内联预览（`include_preview=false` 可关）+ `structuredContent`。
+输入图 ≤50MB，本地路径必须在白名单内；sharp 校验真实格式，超 4MB 或 1024px 自动压缩。**内联图片预览默认关闭**（部分走 Responses 流式的客户端会被工具结果里的图片块弄挂）；需要时传 `include_preview=true` 开启。工具返回 `structuredContent`（文件路径 + `file://` URI）。
 
 ### 默认端点说明
 

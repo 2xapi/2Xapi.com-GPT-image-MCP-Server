@@ -755,7 +755,7 @@ def generate_image(
     quality: str | None = None,
     n: int = 1,
     save: bool = False,
-    include_preview: bool = True,
+    include_preview: bool = False,
 ) -> CallToolResult:
     """Generate an image from a text prompt.
 
@@ -766,8 +766,9 @@ def generate_image(
         quality: Optional quality hint (``low`` / ``medium`` / ``high``).
         n: How many images to generate (default 1, max 10).
         save: When true, also download each image to config ``save_dir``.
-        include_preview: When true (default), attach inline JPEG previews when
-            Pillow is installed.
+        include_preview: When true (opt-in), attach inline JPEG previews when
+            Pillow is installed. Off by default: some Responses-streaming
+            clients fail on image blocks in tool results.
 
     Returns:
         MCP tool result: text report with image URL(s) and metadata, optional
@@ -845,7 +846,7 @@ def edit_image(
     n: int = 1,
     save: bool = False,
     mask: str | None = None,
-    include_preview: bool = True,
+    include_preview: bool = False,
 ) -> CallToolResult:
     """Edit input image(s) following a text prompt (image+text -> image).
 
@@ -860,8 +861,9 @@ def edit_image(
         save: When true, also download each image to config ``save_dir``.
         mask: Optional mask image (local path / URL / data URI / base64) marking
             the region to regenerate; applies to the first input image.
-        include_preview: When true (default), attach inline JPEG previews when
-            Pillow is installed.
+        include_preview: When true (opt-in), attach inline JPEG previews when
+            Pillow is installed. Off by default: some Responses-streaming
+            clients fail on image blocks in tool results.
 
     Returns:
         MCP tool result: text report with the edited image URL(s) and metadata,

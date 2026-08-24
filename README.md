@@ -19,7 +19,7 @@
 ```bash
 claude mcp add -s user gpt-image \
   --env IMAGE_API_KEY=你的key \
-  -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.0/gpt-image-mcp-server-0.3.0.tgz
+  -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.1/gpt-image-mcp-server-0.3.1.tgz
 ```
 
 ### Codex
@@ -27,7 +27,7 @@ claude mcp add -s user gpt-image \
 ```bash
 codex mcp add GPT-image \
   --env IMAGE_API_KEY=你的key \
-  -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.0/gpt-image-mcp-server-0.3.0.tgz
+  -- npx -y https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.1/gpt-image-mcp-server-0.3.1.tgz
 ```
 
 ### Claude Desktop / Cursor（手动配置）
@@ -37,7 +37,7 @@ codex mcp add GPT-image \
   "mcpServers": {
     "GPT-image": {
       "command": "npx",
-      "args": ["-y", "https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.0/gpt-image-mcp-server-0.3.0.tgz"],
+      "args": ["-y", "https://github.com/wenkezhi8/2Xapi.com-GPT-image-MCP-Server/releases/download/v0.3.1/gpt-image-mcp-server-0.3.1.tgz"],
       "env": {
         "IMAGE_API_KEY": "你的key"
       }
@@ -87,7 +87,7 @@ codex mcp add GPT-image \
 
 每张图支持四种输入：**本地文件路径**、**http(s) URL**、`data:` URI、**裸 base64**。走后端的 `/images/edits` 接口（OpenAI 兼容，multipart 上传）。
 
-输入图会做安全校验：**单文件 ≤50MB**、本地路径必须在白名单内；npm 版还会用 sharp 读真实格式（扩展名不符自动纠正），超过 4MB 或 1024px 的图自动压缩后再上传。输出默认带 **512px JPEG 内联预览**（`include_preview=false` 可关，Python 版预览需安装 Pillow），并返回结构化结果（`structuredContent`：文件路径 + `file://` URI）。
+输入图会做安全校验：**单文件 ≤50MB**、本地路径必须在白名单内；npm 版还会用 sharp 读真实格式（扩展名不符自动纠正），超过 4MB 或 1024px 的图自动压缩后再上传。**内联图片预览默认关闭**（部分走 Responses 流式的客户端会被工具结果里的图片块弄挂，如 Codex 自定义端点）；需要预览时传 `include_preview=true`（npm 版直接可用，Python 版需安装 Pillow）。工具同时返回结构化结果（`structuredContent`：文件路径 + `file://` URI）。
 
 ## 目录结构
 

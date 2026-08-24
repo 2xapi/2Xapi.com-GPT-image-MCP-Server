@@ -1,6 +1,6 @@
 {
   "name": "gpt-image-mcp-server",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP server for text-to-image and image-to-image (edit) generation via an OpenAI-compatible images API. One-command install: npx gpt-image-mcp-server",
   "type": "module",
   "bin": {
