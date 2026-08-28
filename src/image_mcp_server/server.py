@@ -599,7 +599,7 @@ def _moderate(prompt: str, mod: dict[str, Any]) -> None:
 # --------------------------------------------------------------------------- #
 # Server & tools                                                              #
 # --------------------------------------------------------------------------- #
-mcp = MCPServer("GPT-image", version="0.3.0")
+mcp = MCPServer("GPT-image", version="0.3.1")
 
 
 @mcp.tool(
