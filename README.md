@@ -2,13 +2,43 @@
 
 把 OpenAI 兼容的文生图/图生图接口封装成 MCP 工具。接入 Claude Code / Codex / Cursor / Claude Desktop 等客户端后，**对话里说「画一只柴犬」就能出图，发一张图说「改成动漫风」就能改图**。每位用户使用**自己的 API Key**，消耗计费到各自账号。
 
-- 🤖 **AI 一键部署**：把仓库地址发给任何 AI（Codex / Claude），它会读 `AGENTS.md` 自动完成部署
-- ⚡ **一键脚本**（二选一）：
-  - `./install.sh`（需先发布 GitHub Release）：`IMAGE_API_KEY=你的key ./install.sh`，自动检测 claude/codex 并接入
-  - `./deploy.sh`（本地构建，不依赖 Release）：`./deploy.sh --client codex --key 你的key`
-- 📄 部署文档：`GPT-image MCP Server部署文档.md`（约 5 分钟，含给 AI 的提示词模板）
-- 🐍 Python 版：`src/`（手动部署用，支持 `uvx` / `uv run`）
-- ⚡ npm 版：`gpt-image-mcp-server/`（一键安装，推荐）
+## 效果演示
+
+左：`generate_image` 文生图（「一只可爱的橘猫，坐在窗台上，简单插画风格」）；中/右：对左图用 `edit_image` 图生图改风格（全部为真实调用输出）。
+
+| 文生图 | 图生图 · 改水彩风 + 樱花 | 图生图 · 改水墨风 |
+| :---: | :---: | :---: |
+| ![文生图示例](docs/images/example-generate.png) | ![图生图水彩示例](docs/images/example-edit-watercolor.png) | ![图生图水墨示例](docs/images/example-edit-inkwash.png) |
+
+## 核心功能
+
+- 🎨 **文生图** `generate_image`：文字描述生成图片，返回图片 URL + 结构化结果
+- ✏️ **图生图** `edit_image`：传 1-10 张图 + 文字指令，改风格 / 合成 / 扩图（走 `/images/edits`，multipart 上传）
+- 🖼 **mask 局部重绘**：可选 mask 图（alpha 通道 PNG，透明区域=重绘区），只改指定区域
+- 📥 **四种图片输入**：本地文件路径 / http(s) URL / `data:` URI / 裸 base64（URL 自动下载再上传）
+- 🛡 **输入安全校验**：单文件 ≤50MB；本地路径白名单（`IMAGE_ALLOWED_ROOTS`，默认仅主目录）；npm 版用 sharp 校验真实格式（扩展名不符自动纠正），超 4MB 或 1024px 自动压缩后上传
+- 🔐 **API Key 脱敏**：错误信息里的 key 自动打码；配置查看时只显示掩码
+- 🚦 **AI 审核闸门**（可选）：提示词先过审核模型再进生图账号，减少风控/封号（fail-open，审核服务不可达时自动放行）
+- ⚙️ **对话内配置**：`set_config` / `set_moderation` 改端点、key、模型、尺寸，立即生效，无需重启
+- 📊 **结构化结果**：`structuredContent` 返回文件路径 + `file://` URI + usage 用量（`include_preview=true` 可选附加内联 JPEG 预览；默认关闭，避免部分 Responses 流式客户端报错）
+
+## 使用方法
+
+接入客户端后，直接用自然语言对话即可，AI 会自动选工具：
+
+| 你说 | 调用 |
+| --- | --- |
+| 「画一只柴犬，竖图」 | `generate_image(prompt=..., size="1024x1536")` |
+| 「画 3 张星空壁纸」 | `generate_image(prompt=..., n=3)` |
+| 「把这张图改成动漫风」（发图或给路径） | `edit_image(images=["/path/to/photo.jpg"], prompt="改成动漫风")` |
+| 「把这两张图合成一张」 | `edit_image(images=["a.png", "b.png"], prompt="合成一张")` |
+| 「只重绘帽子区域」（提供 mask 图） | `edit_image(images=["a.png"], prompt="换一顶帽子", mask="mask.png")` |
+| 「查看当前配置」 | `get_config()` |
+| 「模型换成 dall-e-3」 | `set_config(model="dall-e-3")` |
+| 「更新 key 为 sk-yyy」 | `set_config(api_key="sk-yyy")` |
+| 「列出后端有哪些模型」 | `list_image_models()` |
+
+> mask 说明：alpha 通道 PNG，**透明区域 = 重绘区**，不透明 = 保留；需后端支持（2xapi.com 中转站已验证支持）。
 
 ## 一键安装（npm 版，推荐）
 
@@ -46,6 +76,14 @@ codex mcp add GPT-image \
 }
 ```
 
+- 🤖 **AI 一键部署**：把仓库地址发给任何 AI（Codex / Claude），它会读 `AGENTS.md` 自动完成部署
+- ⚡ **一键脚本**（二选一）：
+  - `./install.sh`（需先发布 GitHub Release）：`IMAGE_API_KEY=你的key ./install.sh`，自动检测 claude/codex 并接入
+  - `./deploy.sh`（本地构建，不依赖 Release）：`./deploy.sh --client codex --key 你的key`
+- 📄 部署文档：`GPT-image MCP Server部署文档.md`（约 5 分钟，含给 AI 的提示词模板）
+- 🐍 Python 版：`src/`（手动部署用，支持 `uvx` / `uv run`，零额外依赖；预览功能需另装 Pillow）
+- ⚡ npm 版：`gpt-image-mcp-server/`（一键安装，推荐）
+
 ## 环境变量
 
 | 变量 | 作用 | 必填 |
@@ -77,22 +115,11 @@ codex mcp add GPT-image \
 | `set_moderation` | 配置 AI 审核闸门（可选，fail-open）|
 | `list_image_models` | 列出后端可用模型 |
 
-### 图生图（`edit_image`）用法
-
-把图片给到对话里的 AI（或直接告诉它图片路径），再说要怎么改：
-
-- 「把这张图改成动漫风」→ `edit_image(images=["/path/to/photo.jpg"], prompt="改成动漫风")`
-- 「把这两张图合成一张」→ `edit_image(images=["a.png", "b.png"], prompt="合成一张")`
-- 「只重绘帽子的区域」→ `edit_image(images=["a.png"], prompt="换一顶帽子", mask="mask.png")`（mask 为 alpha 通道 PNG，透明区域=重绘区，需后端支持）
-
-每张图支持四种输入：**本地文件路径**、**http(s) URL**、`data:` URI、**裸 base64**。走后端的 `/images/edits` 接口（OpenAI 兼容，multipart 上传）。
-
-输入图会做安全校验：**单文件 ≤50MB**、本地路径必须在白名单内；npm 版还会用 sharp 读真实格式（扩展名不符自动纠正），超过 4MB 或 1024px 的图自动压缩后再上传。**内联图片预览默认关闭**（部分走 Responses 流式的客户端会被工具结果里的图片块弄挂，如 Codex 自定义端点）；需要预览时传 `include_preview=true`（npm 版直接可用，Python 版需安装 Pillow）。工具同时返回结构化结果（`structuredContent`：文件路径 + `file://` URI）。
-
 ## 目录结构
 
 ```
 .
+├── docs/images/                      ← README 演示配图
 ├── GPT-image MCP Server部署文档.md   ← 部署文档（必读）
 ├── gpt-image-mcp-server/            ← npm 版（TypeScript，一键安装）
 ├── src/                             ← Python 版（uvx/uv run）
